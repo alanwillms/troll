@@ -229,7 +229,7 @@ abstract class Troll_Model
 					// Set ID value
 					$remoteIdAttribute = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
 					
-					$this->__attributesData['id_' . $calledClass::$__relationships[$calledClass][$name]['local_id']] = $value->$remoteIdAttribute;
+					$this->__attributesData[$calledClass::$__relationships[$calledClass][$name]['local_id']] = $value->$remoteIdAttribute;
 					
 				}
 				// The object will be set only if needed via __get - so it becomes null
@@ -294,8 +294,8 @@ abstract class Troll_Model
 						$remoteId = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
 						
 						// Find object
-						if (isset($this->__attributesData['id_' . $id])) {
-							$this->__attributesData[$name] = $class::find(array($remoteId => $this->__attributesData['id_' . $id]));
+						if (isset($this->__attributesData[$id])) {
+							$this->__attributesData[$name] = $class::find(array($remoteId => $this->__attributesData[$id]));
 						}
 					}
 				
@@ -517,35 +517,107 @@ abstract class Troll_Model
 	 * @param array $options
 	 * @throws Troll_Model_Exception
 	 */
-	/*public static function tree(array $options)
+	public static function tree(array $options)
 	{
-		if (!isset($options['super'])) {
+		if (!isset($options[':super_id'])) {
 			throw new Troll_Model_Exception('You must define a super key to get a tree!');
 		}
-		if (!isset($options['level'])) {
-			$options['level'] = 'level';
+		
+		if (!isset($options[':id'])) {
+			$options[':id'] = 'ID';
+		}
+		
+		if (!isset($options[':level_attribute'])) {
+			$options[':level_attribute'] = 'tree_level';
+		}
+		
+		if (!isset($options[':cols'])) {
+			$options[':cols'] = array('*');
+		}
+		elseif (!is_array($options[':cols'])) {
+			$options[':cols'] = (array) $options[':cols'];
 		}
 		
 		$calledClass = get_called_class();
-		$db = $calledClass::getDatabaseTable()->getAdapter();
+		$db          = $calledClass::getDatabaseTable()->getAdapter();
+		$table       = $calledClass::getDatabaseTable();
+		$schema      = ($schema = $table->info(Zend_Db_Table::SCHEMA)) ? $schema . '.' : '';
+		$tableName   = $table->info(Zend_Db_Table::NAME);
 		
+		// PostgreSQL
 		if ($db instanceof Zend_Db_Adapter_Pdo_Pgsql) {
 			
-			// TODO Implementar SQL para Oracle/PostgreSQL, e exceções para os demais bancos
-			return $calledClass::sqlAll("with recursive t(node, path, titulo, subtitulo, url, acessos) as
-			(
-			select id, array[id], titulo, subtitulo, url, acessos from pagina where id_pai is null
-			union all
-			select p.id, t.path || array[p.id] , p.titulo, p.subtitulo, p.url, p.acessos
-			from pagina p 
-			join t on (p.id_pai = t.node)
-			where id <> any(t.path)
-			)
-			select t.*, node as id, array_length(path, 1) as " . $options['level'] . " from t order by path
-			");
+			$sql  = 'WITH RECURSIVE recursive_table(recursive_node, '
+			      . 'recursive_path, ' . implode(', ', $options[':cols'])
+			      . ') AS (' . "\n" . 'SELECT '
+			      . $options[':id'] . ', ARRAY[' . $options[':id'] . '], '
+			      . implode(', ', $options[':cols']) . ' FROM ' . $schema
+			      . $tableName . ' WHERE '
+			      . $options[':super_id'] . ' IS NULL ' . "\n"
+			      . ' UNION ALL ' . "\n"
+			      . ' SELECT recursive_alias.' . $options[':id'] . ', '
+			      . 'recursive_table.recursive_path || '
+			      . 'ARRAY[recursive_alias.' . $options[':id']
+			      . '], recursive_alias.'
+			      . implode(', recursive_alias.', $options[':cols']) . ' '
+			      . ' FROM ' . $schema . $tableName . ' recursive_alias ' . "\n"
+			      . ' JOIN recursive_table ON (recursive_alias.'
+			      . $options[':super_id'] . ' = recursive_table.recursive_node)'
+			      . ' WHERE ' . $options[':id'] . ' <> ANY(recursive_table.'
+			      . 'recursive_path) ) ' . "\n"
+			      . 'SELECT recursive_table.*, recursive_node as '
+			      . $options[':id'] . ', ARRAY_LENGTH(recursive_path, 1) AS '
+			      . $options[':level_attribute'] . ' FROM recursive_table '
+			      . ' ORDER BY recursive_path'
+			;
+			
+			return $calledClass::sqlAll($sql);
 			
 		}
-	}*/
+		// Oracle
+		else if ($db instanceof Zend_Db_Adapter_Pdo_Oci
+		      || $db instanceof Zend_Db_Adapter_Oracle) {
+			
+		    
+		    $sql = 'SELECT ';
+		    
+		    // ..columns from
+		    foreach ($options[':cols'] as $alias => &$col) {
+		    	if (is_numeric($alias)) {
+		    		$col = $table->info(Zend_Db_Table::NAME) . '.' . $col;
+		    	}
+		    	else {
+		    		$col = $table->info(Zend_Db_Table::NAME) . '.' . $col . ' AS ' . $alias;
+		    	}
+		    }
+		    $options[':cols'][] = 'level AS ' . $options[':level_attribute'];
+		    
+		    $sql .= implode(', ', $options[':cols']) . ' '
+		          . ' FROM ' . $table->info(Zend_Db_Table::SCHEMA) . '.'
+		          . $table->info(Zend_Db_Table::NAME) . ' '
+		    ;
+		    
+		    // "Tree"
+		    $sql .= ' CONNECT BY PRIOR ' . $options[':id'] . ' = '
+		          . $options[':super_id'] . ' '
+		          . ' START WITH ' . $options[':super_id'] . ' IS NULL '
+		    ;
+		    
+		   	// Final
+		   	if (isset($options[':where'])) {
+		   		$sql .= 'WHERE ' . $options[':where'] . ' ';
+		   	}
+		   	
+		   	if (isset($options[':order'])) {
+		   		$sql .= ' ORDER SIBLINGS BY ' . $options[':order'] . ' ';
+		   	}
+		    
+		    return $calledClass::sqlAll($sql);
+		}
+		else {
+			throw new Troll_Model_Exception('Trees currently work with Oracle and PostgreSQL!');
+		}
+	}
 	
 	/**
 	 * Find one object exclusively by primary keys.
@@ -742,13 +814,13 @@ abstract class Troll_Model
 				// Get relationship
 				$relData = $calledClass::$__relationships[$calledClass][$rel];
 				
-				$localIdColumn = 'id_' . $relData['local_id']; 
+				$localIdColumn = $relData['local_id']; 
 				
-				// Get local IDS // TODO Array mapping?
+				// Get local IDS
 				$select->reset(Zend_Db_Select::FROM);
 				$select->reset(Zend_Db_Select::COLUMNS);
 				$select->distinct();
-				$select->from($calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME), $localIdColumn);
+				$select->from($calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME), $calledClass::attributeToColumn($localIdColumn));
 				
 				$localIdsRows = $calledClass::getDatabaseTable()->fetchAll($select);
 				$localIds = array();
@@ -850,6 +922,8 @@ abstract class Troll_Model
 	 */
 	public function save($validates = true)
 	{
+		$this->_beforeSave();
+		
 		// Is it read only?
 		if ($this->_readOnly) {
 			throw new Troll_Model_Exception('This object is read only!');
@@ -926,13 +1000,18 @@ abstract class Troll_Model
 			}
 			
 			$this->_beforeUpdate();
-			$updatedRows = $this->getDatabaseTable()->update($updateData, implode(' ', $select->getPart(Zend_Db_Table_Select::WHERE)));
-			$this->_afterUpdate();
 			
-			// If it does not fail to update
-			if ($updatedRows > 0) {
-				$inserting = false;
+			// There is something to update
+			if (count($updateData)) {
+				
+				$updatedRows = $this->getDatabaseTable()->update($updateData, implode(' ', $select->getPart(Zend_Db_Table_Select::WHERE)));
+			
+				// If it does not fail to update
+				if ($updatedRows > 0) {
+					$inserting = false;
+				}
 			}
+			$this->_afterUpdate();
 		}
 		
 		// Insert
@@ -941,6 +1020,8 @@ abstract class Troll_Model
 			$this->_beforeInsert();
 			
 			$pk = $this->getDatabaseTable()->insert($data);
+			
+			$this->__isNew = false;
 			
 			if (is_array($pk)) {
 				foreach ($pk as $key => $value) {
@@ -953,6 +1034,8 @@ abstract class Troll_Model
 			
 			$this->_afterInsert();
 		}
+		
+		$this->_afterSave();
 		
 		return true;
 	}
@@ -1011,6 +1094,22 @@ abstract class Troll_Model
 	 * using $this->__isValid flag
 	 */
 	protected function _customValidations()
+	{
+		
+	}
+	
+	/**
+	 * You should override if it is necessary,
+	 */
+	protected function _beforeSave()
+	{
+		
+	}
+	
+	/**
+	 * You should override if it is necessary,
+	 */
+	protected function _afterSave()
 	{
 		
 	}
@@ -1286,7 +1385,10 @@ abstract class Troll_Model
 					if ($data['LENGTH']) {
 						// String length for string values
 						if ($calledClass::$__dataTypes[$calledClass][$col] == Troll_Model::TYPE_STRING) {
-							$calledClass::$__attributesValidators[$calledClass][$col]['StringLength'] = array('max' => $data['LENGTH']);
+							// May be it returns -1 - I will cut "0" too
+							if ($data['LENGTH'] > 0) {
+								$calledClass::$__attributesValidators[$calledClass][$col]['StringLength'] = array('max' => $data['LENGTH']);
+							}
 						}
 					}
 					// Types validators
@@ -1335,22 +1437,12 @@ abstract class Troll_Model
 				
 				$calledClass::$__relationships[$calledClass] = array();
 				
-				foreach ($references as $data) {
+				foreach ($references as $localName => $data) {
 					
-					// Try to recreate class name
-					$className = explode('_', $data['refTableClass']);
-					if (($pos = array_search('DbTable', $className)) !== false) {
-						unset($className[$pos]);
-					}
-					$className = implode('_', $className);
+					$className = $data['refClass'];
 					
 					// Local ID
 					$localId = is_array($data['columns']) ? current($data['columns']) : $data['columns'];
-					$localName = explode('_', $localId);
-					if (($pos = array_search('id', $localName)) !== false) {
-						unset($localName[$pos]);
-					}
-					$localName = implode('_', $localName);
 					
 					// Set a relationship
 					$calledClass::$__relationships[$calledClass][$localName] = array(

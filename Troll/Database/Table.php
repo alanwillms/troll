@@ -15,7 +15,7 @@ class Troll_Database_Table extends Zend_Db_Table
 	 * 
 	 * <code>
 	 * array (
-	 *     'column' => 'schema.function_name(?)',
+	 *     'column'  => 'schema.function_name(?)',
 	 *     'column2' => "to_char(?, 'dd/mm/rrrr')",
 	 * )
 	 * </code>
