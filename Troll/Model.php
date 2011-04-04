@@ -1047,8 +1047,8 @@ abstract class Troll_Model
 	 */
 	public function setFormErrors(Zend_Form $form, $subform = null)
 	{
-		$errors = $pagina->errors();
-				
+		$errors = $this->errors();
+		
 		foreach ($errors as $field => $messages) {
 			
 			$element = ($subform) ? $form->$subform->getElement($field) : $form->getElement($field);
