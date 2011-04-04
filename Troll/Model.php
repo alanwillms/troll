@@ -1226,10 +1226,15 @@ abstract class Troll_Model
 	 */
 	protected function _addError($attribute, $messages)
 	{
+		if (!is_array($messages)) {
+			$messages = array($messages);
+		}
+		
 		if (!isset($this->__errors[$attribute])) {
 			$this->__errors[$attribute] = array();
 		}
 		$this->__errors[$attribute] = array_merge($this->__errors[$attribute], $messages);
+		$this->__isValid = false;
 	}
 	
 	/**
