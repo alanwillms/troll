@@ -1,0 +1,28 @@
+RELEASE INFORMATION
+---------------
+Troll Library 0.1.2
+
+THIS RELEASE IS A DEVELOPMENT RELEASE AND NOT INTENDED FOR PRODUCTION USE.
+PLEASE USE AT YOUR OWN RISK.
+
+SYSTEM REQUIREMENTS
+-------------------
+
+Zend Framework 1.11
+
+INSTALLATION
+------------
+
+Please see INSTALL.txt. # Not written yet
+
+CONTRIBUTING
+------------
+
+If you wish to contribute to Troll Library, contact me:
+dyulax@gmail.com.
+
+DOCUMENTATION
+----------------------
+
+Online documentation can be found at 
+http://alanwillms.com/2011/04/04/troll-model/
