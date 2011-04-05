@@ -13,7 +13,21 @@ Zend Framework 1.11
 INSTALLATION
 ------------
 
-Please see INSTALL.txt. # Not written yet
+Copy the "Troll" folder and its contents to your project library directory.
+
+Setup in your autoloader:
+
+$autoloader->removeResourceType('model');
+ // Using just "ClassName" instead of "Model_ClassName"
+$autoloader->addResourceType('model', 'models', '');
+
+$autoloader->removeResourceType('DbTable');
+ // Using just "DbTable_ClassName" instead of "Model_DbTable_ClassName"
+$autoloader->addResourceType('DbTable', 'models/DbTable', 'DbTable');     
+
+// Troll_ 
+$autoloader->setFallbackAutoloader(true);
+$autoloader->registerNamespace(Troll_');
 
 CONTRIBUTING
 ------------
@@ -25,4 +39,5 @@ DOCUMENTATION
 ----------------------
 
 Online documentation can be found at 
-http://alanwillms.com/2011/04/04/troll-model/
+http://alanwillms.com/troll/
+(portuguese online)
