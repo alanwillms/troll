@@ -42,7 +42,7 @@ abstract class Troll_Model
 	 * Read only?
 	 * @var boolean
 	 */
-	protected $_readOnly = false;
+	protected $__readOnly = false;
 	
 	/**
 	 * Attributes data of the local object
@@ -141,38 +141,25 @@ abstract class Troll_Model
 				}
 			}
 		}
+			
+		// If it is not a new object
+		if (!$isNew) {
+			$this->__isNew = false;
+		}
 		
 		if (null !== $mixed) {
 			
 			if (!is_array($mixed)) {
 				if (!is_array($calledClass::getAttributes()) || !count($calledClass::getAttributes()) != 1) {
-					throw new Troll_Model_Exception('Constructor received ' .
-					                                 gettype($mixed) .
-					                                 ' Expecting array or null'
-					                                 );
+					throw new Troll_Model_Exception(
+						'Constructor received ' . gettype($mixed) .
+	                    ' Expecting array or null'
+                    );
 				}
 				$mixed = array(current($calledClass::getAttributes()) => $mixed);
 			}
 			
-			// Populate
-			foreach ($calledClass::getAttributes() as $attr) {
-				
-				if (isset($mixed[$attr]) && $mixed[$attr] !== null && $mixed[$attr] !== '') {
-					
-					// If it is a primary key and it is a database register
-					if (!$isNew && in_array($attr, $calledClass::$__primaryKeys)) {
-						$this->__attributesData[$attr] = $mixed[$attr];
-					}
-					else {
-						$this->$attr = $mixed[$attr];
-					}
-				}
-			}
-			
-			// If it is not a new object
-			if (!$isNew) {
-				$this->__isNew = false;
-			}
+			$this->setAttributesData($mixed);
 		}
 	}
 	
@@ -862,6 +849,31 @@ abstract class Troll_Model
 	}
 	
 	/**
+	 * Populate object attributes
+	 * @param array $data
+	 */
+	public function setAttributesData(array $mixed)
+	{
+		$calledClass = get_called_class();
+		
+		// Populate
+		foreach ($calledClass::getAttributes() as $attr) {
+			
+			if (isset($mixed[$attr]) && $mixed[$attr] !== null && $mixed[$attr] !== '') {
+				
+				// If it is a primary key and it is a database register
+				if (!$this->__isNew && in_array($attr, $calledClass::$__primaryKeys)) {
+					$this->__attributesData[$attr] = $mixed[$attr];
+				}
+				else {
+					$this->$attr = $mixed[$attr];
+				}
+			}
+		}
+		return $this;
+	}
+	
+	/**
 	 * Return array presentation of the object
 	 * @return array
 	 */
@@ -877,7 +889,7 @@ abstract class Troll_Model
 	public function delete()
 	{
 		// Is it read only?
-		if ($this->_readOnly) {
+		if ($this->__readOnly) {
 			throw new Troll_Model_Exception('This object is read only!');
 		}
 		
@@ -903,7 +915,7 @@ abstract class Troll_Model
 			$select->where($pk . ' = ?', $this->$pk);
 		}
 		
-		$where = '(' . implode(') and (', $select->getPart(Zend_Db_Select::WHERE)) . ')';
+		$where = implode(' ', $select->getPart(Zend_Db_Select::WHERE));
 		
 		// Delete
 		$this->_beforeDelete();
@@ -925,7 +937,7 @@ abstract class Troll_Model
 		$this->_beforeSave();
 		
 		// Is it read only?
-		if ($this->_readOnly) {
+		if ($this->__readOnly) {
 			throw new Troll_Model_Exception('This object is read only!');
 		}
 		
@@ -990,13 +1002,17 @@ abstract class Troll_Model
 				$select->where($pk . ' = ?', '' . $data[$pk] . '');
 			}
 			
-			
 			// Update only changed columns
 			$updateData = array();
 			
-			foreach ($this->__changedAttributes as $attr) {
-				$attr = $calledClass::attributeToColumn($attr);
-				$updateData[$attr] = $data[$attr];
+			if (isset($this->__changedAttributes)) {
+				foreach ($this->__changedAttributes as $attr) {
+					$attr = $calledClass::attributeToColumn($attr);
+					$updateData[$attr] = $data[$attr];
+				}
+			}
+			else {
+				$updateData = $data;	
 			}
 			
 			$this->_beforeUpdate();
@@ -1047,8 +1063,8 @@ abstract class Troll_Model
 	 */
 	public function setFormErrors(Zend_Form $form, $subform = null)
 	{
-		$errors = $pagina->errors();
-				
+		$errors = $this->errors();
+		
 		foreach ($errors as $field => $messages) {
 			
 			$element = ($subform) ? $form->$subform->getElement($field) : $form->getElement($field);
