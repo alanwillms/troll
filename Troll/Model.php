@@ -203,7 +203,7 @@ abstract class Troll_Model
 		$method = 'set' . self::_getUnderscoreToCamelCaseFilter()->filter($name);
 		
 		// Before setting, cast the value
-		if (!isset($this->_attributesWithoutCasting[$name])) {
+		if (false === in_array($name, $this->_attributesWithoutCasting)) {
 			$value = $this->cast($value, $this->_getTypeOf($name));
 		}
 		
@@ -221,17 +221,21 @@ abstract class Troll_Model
 				// Setting a relationship object
 				if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 					
+					$remoteClass = $calledClass::$__relationships[$calledClass][$name]['class_name'];
+					
 					// Test object type
-					if (!$value instanceof $calledClass::$__relationships[$calledClass][$name]['class_name']) {
+					if (!$value instanceof $remoteClass) {
 						throw new Class_Model_Exception('Value must be an instance '
 						                              . 'of ' . $calledClass::$__relationships[$calledClass][$name]['class_name']
 						                              . ' class');
 					}
 					
-					// Set ID value
-					$remoteIdAttribute = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
-					
-					$this->__attributesData[$calledClass::$__relationships[$calledClass][$name]['local_id']] = $value->$remoteIdAttribute;
+					// Set IDs values
+					foreach ($calledClass::$__relationships[$calledClass][$name]['remote_id'] as $k => $rem) {
+						$rem = $remoteClass::columnToAttribute($rem);
+						$loc = $calledClass::columnToAttribute($calledClass::$__relationships[$calledClass][$name]['local_id'][$k]);
+						$this->__attributesData[$loc] = $value->$rem;
+					}
 					
 				}
 				// The object will be set only if needed via __get - so it becomes null
@@ -291,13 +295,24 @@ abstract class Troll_Model
 					// If there is an unsetted object
 					if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 						
-						$id = $calledClass::$__relationships[$calledClass][$name]['local_id'];
-						$class = $calledClass::$__relationships[$calledClass][$name]['class_name'];
-						$remoteId = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
+						$ids       = $calledClass::$__relationships[$calledClass][$name]['local_id'];
+						$class    = $calledClass::$__relationships[$calledClass][$name]['class_name'];
+						$remoteIds = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
 						
-						// Find object
-						if (isset($this->__attributesData[$id])) {
-							$this->__attributesData[$name] = $class::find(array($remoteId => $this->__attributesData[$id]));
+						// TODO Ao setar os relacionamentos, testar se tem
+						// o mesmo numero de colunas dos dois lados
+						
+						// "Where" condition
+						$options = array();
+						foreach ($ids as $k => $id) {
+							if (isset($this->__attributesData[$id])) {
+								$options[$remoteIds[$k]] = $this->$id;
+							}
+						}
+						
+						// Find the object
+						if (count($ids) == count($options)) {
+							$this->__attributesData[$name] = $class::find($options);
 						}
 					}
 				
@@ -347,9 +362,26 @@ abstract class Troll_Model
 		$calledClass = get_called_class();
 		
 		if ($calledClass::hasAttributesMapping()) {
+			
 			$mapping = $calledClass::getAttributesMapping();
-			if (isset($mapping[$name])) {
-				return $mapping[$name];
+			
+			$return = array();
+			$names   = (array) $name;
+			
+			foreach ($names as $attribute) {
+				if (isset($mapping[$attribute])) {
+					$return[] = $mapping[$attribute];
+				}
+				else {
+					$return[] = $attribute;
+				}
+			}
+			
+			if (is_array($name)) {
+				return $return;
+			}
+			else {
+				return current($return);
 			}
 		}
 		
@@ -706,6 +738,38 @@ abstract class Troll_Model
 			}
 			if (is_array($ids)) {
 				
+				if (isset($ids[':include'])) {
+					
+					// Rise relationships
+					$calledClass::_setupRelationships();
+					
+					$ids[':include'] = (array) $ids[':include'];
+					
+					// If does get specific attributes
+					if (isset($ids[':cols'])) {
+						
+						$ids[':cols'] = (array) $ids[':cols'];
+					
+						// Includes required attributes
+						foreach ($ids[':include'] as $relationship => $options) {
+							
+							if (is_numeric($relationship)) {
+								$relationship = $options;
+							}
+							
+							// Get attributes names
+							$info = $calledClass::$__relationships[$calledClass][$relationship];
+							
+							foreach ($info['local_id'] as $attribute) {
+								if (false === in_array($attribute, $ids[':cols'])) {
+									$ids[':cols'][] = $attribute;
+								}
+							}
+						}
+					
+					}
+				}
+				
 				if (!isset($ids[':cols'])) {
 					$ids[':cols'] = $calledClass::getAttributes();
 				}
@@ -797,19 +861,20 @@ abstract class Troll_Model
 				$data = $row->toArray();
 			}
 			
-			$all[] = new $calledClass($data, false);
+			$class = new $calledClass($data, false);
+			
+			$all[] = $class;
 		}
 		
 		// Includes
 		if (array_key_exists(':include', $ids)) {
 			
+			// Rise relationships
 			$calledClass::_setupRelationships();
-			
-			$ids[':include'] = (array) $ids[':include'];
-			
+					
 			foreach ($ids[':include'] as $k => $v) {
 				
-				// Is it :include => array('table') ou :include => array('table' => ###') ?
+				// Is it :include => array('table') ou :include => array('table' => ###) ?
 				$rel = (is_numeric($k)) ? $v : $k;
 				$rel = $options = null;
 				
@@ -825,35 +890,81 @@ abstract class Troll_Model
 				// Get relationship
 				$relData = $calledClass::$__relationships[$calledClass][$rel];
 				
-				$localIdColumn = $relData['local_id']; 
+				$localIdColumns  = $relData['local_id']; 
+				$remoteIdColumns = $relData['remote_id']; 
 				
 				// Get local IDS
 				$select->reset(Zend_Db_Select::FROM);
 				$select->reset(Zend_Db_Select::COLUMNS);
 				$select->distinct();
-				$select->from($calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME), $calledClass::attributeToColumn($localIdColumn));
+				$select->from(
+					$calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME),
+					$calledClass::attributeToColumn($localIdColumns)
+				);
 				
 				$localIdsRows = $calledClass::getDatabaseTable()->fetchAll($select);
+				
 				$localIds = array();
 				
+				// Clauses
 				foreach ($localIdsRows as $row) {
-					$localIds[] = $row->$localIdColumn;
+					
+					$data = array();
+					
+					foreach ($calledClass::attributeToColumn($localIdColumns) as $column) {
+						$data[$column] = $row->$column; 
+					}
+					
+					$localIds[serialize($localIdColumns)] = $data;
 				}
 				
 				unset($localIdsRows);
 				
+				// Get required columns
+				if (isset($options[':cols'])) {
+					foreach ($remoteIdColumns as $attribute) {
+						if (false === in_array($attribute, $options[':cols'])) {
+							$options[':cols'][] = $attribute;
+						}
+					}
+				}
+				
+				// Where condition - "in()" has a max limit in some SGDBs
+				$where = array();
+				
+				foreach ($localIds as $data) {
+					$and = array();
+					foreach ($calledClass::attributeToColumn($localIdColumns) as $k => $column) {
+						$and[] = $calledClass::attributeToColumn($remoteIdColumns[$k]) . ' = ' . $data[$column];
+					}
+					$where[] = '(' . implode(') and (', $and) . ')';
+				}
+				
+				$where = '(' . implode(")\nor\n(", $where) . ')';
+				
 				// Fetch all relationships with these IDs
-				$options['id in (?)'] = $localIds;
+				$options[] = $where;
 				$rels = $relData['class_name']::all($options);
 				$relationships = array();
 				
 				foreach ($rels as $row) {
-					$relationships[$row->$relData['remote_id']] = $row;
+					$data = array();
+					foreach ($remoteIdColumns as $rem) {
+						$rem = $relData['class_name']::columnToAttribute($rem);
+						$data[] = $row->$rem;
+					}
+					$relationships[implode('|', $data)] = $row;
 				}
 				
 				// Insert the objects
 				foreach ($all as $row) {
-					$row->$rel = $relationships[$row->$localIdColumn];
+					
+					$data = array();
+					foreach ($localIdColumns as $loc) {
+						$loc = $calledClass::columnToAttribute($loc);
+						$data[] = $row->$loc;
+					}
+					$row->$rel = $relationships[implode('|', $data)];
 				}
 			}
 			
@@ -862,7 +973,7 @@ abstract class Troll_Model
 		// If limit is only 1, must be an object and not an array
 		if ($limit == 1) {
 			if (count($all)) {
-				return current($all);
+				return array_shift($all);
 			}
 			else {
 				return null;
@@ -1018,7 +1129,12 @@ abstract class Troll_Model
 		// Exclusive for boolean types
 		foreach ($data as $col => $value) {
 			if ($this->_getTypeOf($col) == Troll_Model::TYPE_BOOLEAN) {
-				$data[$col] = ($value) ? new Zend_Db_Expr('true') : new Zend_Db_Expr('false');
+				if ($value !== null) {
+					$data[$col] = ($value) ? new Zend_Db_Expr('true') : new Zend_Db_Expr('false');
+				}
+				else {
+					$data[$col] = $value;
+				}
 			}
 		}
 		
@@ -1248,7 +1364,13 @@ abstract class Troll_Model
 					}
 					$validator = (null == $options) ? new $validatorName() : new $validatorName($options);
 					
-					if (!$validator->isValid($this->__attributesData[$attribute])) {
+					$value = $this->__attributesData[$attribute];
+					
+					if ($value instanceof Zend_Db_Expr) {
+						$value = '' . $value;
+					}
+					
+					if (!$validator->isValid($value)) {
 						$this->__isValid = false;
 						$this->_addError($attribute, $validator->getMessages());
 					}
@@ -1316,7 +1438,14 @@ abstract class Troll_Model
 					$type = Troll_Model::TYPE_STRING;
 				}
 				elseif (false !== strpos($data['DATA_TYPE'], 'int')) {
-					$type = Troll_Model::TYPE_INTEGER;
+					
+					// FIXME Quando resolver arrays, resolver isso
+					if (preg_match('/^_/', $data['DATA_TYPE'])) {
+						$type = Troll_Model::TYPE_STRING;
+					}
+					else {
+						$type = Troll_Model::TYPE_INTEGER;
+					}
 				}
 				elseif ((false !== strpos($data['DATA_TYPE'], 'float'))
 					|| (false !== strpos($data['DATA_TYPE'], 'double'))) {
@@ -1487,16 +1616,11 @@ abstract class Troll_Model
 				
 				foreach ($references as $localName => $data) {
 					
-					$className = $data['refClass'];
-					
-					// Local ID
-					$localId = is_array($data['columns']) ? current($data['columns']) : $data['columns'];
-					
 					// Set a relationship
 					$calledClass::$__relationships[$calledClass][$localName] = array(
-						'local_id'   => $localId,
-						'class_name' => $className,
-						'remote_id'  => is_array($data['refColumns']) ? current($data['refColumns']) : $data['refColumns'],
+						'local_id'   => (array) $data['columns'],
+						'class_name' => $data['refClass'],
+						'remote_id'  => (array) $data['refColumns'],
 					);
 					
 				}
