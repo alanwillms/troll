@@ -22,6 +22,48 @@ abstract class Troll_Model
 	const TYPE_BOOLEAN  = 7;	
 	
 	/**
+	 * Flag pointig if this is a new object
+	 * @var boolean
+	 */
+	protected $__isNew = true;
+	
+	/**
+	 * Flag pointig if this is a valid object
+	 * @var boolean
+	 */
+	protected $__isValid = true;
+	
+	/**
+	 * Error messages
+	 * @var array
+	 */
+	protected $__errors;
+	
+	/**
+	 * Attributes without casting on setting or getting
+	 * @var string|array
+	 */
+	protected $_attributesWithoutCasting;
+	
+	/**
+	 * Read only?
+	 * @var boolean
+	 */
+	protected $__readOnly = false;
+	
+	/**
+	 * Attributes data of the local object
+	 * @var array
+	 */
+	protected $__attributesData;
+	
+	/**
+	 * Attributes changing log
+	 * @var array
+	 */
+	protected $__changedAttributes;
+	
+	/**
 	 * Relationships
 	 * 
 	 * <code>
@@ -37,24 +79,6 @@ abstract class Troll_Model
 	 * @var array
 	 */
 	protected static $__relationships;
-	
-	/**
-	 * Read only?
-	 * @var boolean
-	 */
-	protected $_readOnly = false;
-	
-	/**
-	 * Attributes data of the local object
-	 * @var array
-	 */
-	protected $__attributesData;
-	
-	/**
-	 * Attributes changing log
-	 * @var array
-	 */
-	protected $__changedAttributes;
 	
 	/**
 	 * Array with attributes of the model
@@ -99,24 +123,6 @@ abstract class Troll_Model
 	protected static $_underscoreToCamelCaseFilter;
 	
 	/**
-	 * Flag pointig if this is a new object
-	 * @var boolean
-	 */
-	protected $__isNew = true;
-	
-	/**
-	 * Flag pointig if this is a valid object
-	 * @var boolean
-	 */
-	protected $__isValid = true;
-	
-	/**
-	 * Error messages
-	 * @var array
-	 */
-	protected $__errors;
-	
-	/**
 	 * Constructor
 	 * @param Mixed Could be an array with attributes data, or in the case of 
 	 * only one attribute, some value, or null for an empty object
@@ -125,6 +131,13 @@ abstract class Troll_Model
 	{
 		$calledClass = get_called_class();
 		$calledClass::_setupAttributes();
+		
+		if ($this->_attributesWithoutCasting) {
+			$this->_attributesWithoutCasting = (array) $this->_attributesWithoutCasting;
+		}
+		else {
+			$this->_attributesWithoutCasting = array();
+		}
 		
 		// Create local attributes data container
 		if (isset($this)) {
@@ -141,38 +154,25 @@ abstract class Troll_Model
 				}
 			}
 		}
+			
+		// If it is not a new object
+		if (!$isNew) {
+			$this->__isNew = false;
+		}
 		
 		if (null !== $mixed) {
 			
 			if (!is_array($mixed)) {
 				if (!is_array($calledClass::getAttributes()) || !count($calledClass::getAttributes()) != 1) {
-					throw new Troll_Model_Exception('Constructor received ' .
-					                                 gettype($mixed) .
-					                                 ' Expecting array or null'
-					                                 );
+					throw new Troll_Model_Exception(
+						'Constructor received ' . gettype($mixed) .
+	                    ' Expecting array or null'
+                    );
 				}
 				$mixed = array(current($calledClass::getAttributes()) => $mixed);
 			}
 			
-			// Populate
-			foreach ($calledClass::getAttributes() as $attr) {
-				
-				if (isset($mixed[$attr]) && $mixed[$attr] !== null && $mixed[$attr] !== '') {
-					
-					// If it is a primary key and it is a database register
-					if (!$isNew && in_array($attr, $calledClass::$__primaryKeys)) {
-						$this->__attributesData[$attr] = $mixed[$attr];
-					}
-					else {
-						$this->$attr = $mixed[$attr];
-					}
-				}
-			}
-			
-			// If it is not a new object
-			if (!$isNew) {
-				$this->__isNew = false;
-			}
+			$this->setAttributesData($mixed);
 		}
 	}
 	
@@ -203,7 +203,9 @@ abstract class Troll_Model
 		$method = 'set' . self::_getUnderscoreToCamelCaseFilter()->filter($name);
 		
 		// Before setting, cast the value
-		$value = $this->cast($value, $this->_getTypeOf($name));
+		if (!isset($this->_attributesWithoutCasting[$name])) {
+			$value = $this->cast($value, $this->_getTypeOf($name));
+		}
 		
 		// Try to load an setAttributeName method
 		if (in_array($method, $methods)) {
@@ -544,6 +546,10 @@ abstract class Troll_Model
 		$schema      = ($schema = $table->info(Zend_Db_Table::SCHEMA)) ? $schema . '.' : '';
 		$tableName   = $table->info(Zend_Db_Table::NAME);
 		
+		if (!isset($options[':start_with'])) {
+			$options[':start_with'] = ' IS NULL ';
+		}
+		
 		// PostgreSQL
 		if ($db instanceof Zend_Db_Adapter_Pdo_Pgsql) {
 			
@@ -553,7 +559,7 @@ abstract class Troll_Model
 			      . $options[':id'] . ', ARRAY[' . $options[':id'] . '], '
 			      . implode(', ', $options[':cols']) . ' FROM ' . $schema
 			      . $tableName . ' WHERE '
-			      . $options[':super_id'] . ' IS NULL ' . "\n"
+			      . $options[':super_id'] . $options[':start_with'] . "\n"
 			      . ' UNION ALL ' . "\n"
 			      . ' SELECT recursive_alias.' . $options[':id'] . ', '
 			      . 'recursive_table.recursive_path || '
@@ -570,6 +576,10 @@ abstract class Troll_Model
 			      . $options[':level_attribute'] . ' FROM recursive_table '
 			      . ' ORDER BY recursive_path'
 			;
+			
+			if (isset($options[':order'])) {
+				$sql .= ', ' . $options[':order'];
+			}
 			
 			return $calledClass::sqlAll($sql);
 			
@@ -600,7 +610,7 @@ abstract class Troll_Model
 		    // "Tree"
 		    $sql .= ' CONNECT BY PRIOR ' . $options[':id'] . ' = '
 		          . $options[':super_id'] . ' '
-		          . ' START WITH ' . $options[':super_id'] . ' IS NULL '
+		          . ' START WITH ' . $options[':super_id'] . $options[':start_with']
 		    ;
 		    
 		   	// Final
@@ -751,11 +761,12 @@ abstract class Troll_Model
 							}
 							
 							// Attributes to columns mapping
+							$type = $calledClass::_getTypeOf($expression);
 							if ($calledClass::hasAttributesMapping()) {
 								$expression = $calledClass::attributeToColumn($expression);
 							}
 							
-							$select->where($expression . ' = ?', $value);
+							$select->where($expression . ' = ?', $calledClass::cast($value, $type));
 						}
 					}
 				}
@@ -862,6 +873,31 @@ abstract class Troll_Model
 	}
 	
 	/**
+	 * Populate object attributes
+	 * @param array $data
+	 */
+	public function setAttributesData(array $mixed)
+	{
+		$calledClass = get_called_class();
+		
+		// Populate
+		foreach ($calledClass::getAttributes() as $attr) {
+			
+			if (isset($mixed[$attr]) && $mixed[$attr] !== null && $mixed[$attr] !== '') {
+				
+				// If it is a primary key and it is a database register
+				if (!$this->__isNew && in_array($attr, $calledClass::$__primaryKeys)) {
+					$this->__attributesData[$attr] = $mixed[$attr];
+				}
+				else {
+					$this->$attr = $mixed[$attr];
+				}
+			}
+		}
+		return $this;
+	}
+	
+	/**
 	 * Return array presentation of the object
 	 * @return array
 	 */
@@ -877,7 +913,7 @@ abstract class Troll_Model
 	public function delete()
 	{
 		// Is it read only?
-		if ($this->_readOnly) {
+		if ($this->__readOnly) {
 			throw new Troll_Model_Exception('This object is read only!');
 		}
 		
@@ -903,7 +939,7 @@ abstract class Troll_Model
 			$select->where($pk . ' = ?', $this->$pk);
 		}
 		
-		$where = '(' . implode(') and (', $select->getPart(Zend_Db_Select::WHERE)) . ')';
+		$where = implode(' ', $select->getPart(Zend_Db_Select::WHERE));
 		
 		// Delete
 		$this->_beforeDelete();
@@ -924,8 +960,15 @@ abstract class Troll_Model
 	{
 		$this->_beforeSave();
 		
+		if ($this->__isNew) {
+			$this->_beforeInsert();
+		}
+		else {
+			$this->_beforeUpdate();
+		}
+		
 		// Is it read only?
-		if ($this->_readOnly) {
+		if ($this->__readOnly) {
 			throw new Troll_Model_Exception('This object is read only!');
 		}
 		
@@ -990,16 +1033,18 @@ abstract class Troll_Model
 				$select->where($pk . ' = ?', '' . $data[$pk] . '');
 			}
 			
-			
 			// Update only changed columns
 			$updateData = array();
 			
-			foreach ($this->__changedAttributes as $attr) {
-				$attr = $calledClass::attributeToColumn($attr);
-				$updateData[$attr] = $data[$attr];
+			if (isset($this->__changedAttributes)) {
+				foreach ($this->__changedAttributes as $attr) {
+					$attr = $calledClass::attributeToColumn($attr);
+					$updateData[$attr] = $data[$attr];
+				}
 			}
-			
-			$this->_beforeUpdate();
+			else {
+				$updateData = $data;	
+			}
 			
 			// There is something to update
 			if (count($updateData)) {
@@ -1016,8 +1061,6 @@ abstract class Troll_Model
 		
 		// Insert
 		if ($inserting) {
-			
-			$this->_beforeInsert();
 			
 			$pk = $this->getDatabaseTable()->insert($data);
 			
@@ -1568,7 +1611,7 @@ abstract class Troll_Model
 	 * @param string $attribute
 	 * @return int
 	 */
-	protected function _getTypeOf($attribute)
+	protected static function _getTypeOf($attribute)
 	{
 		$calledClass = get_called_class();
 		
