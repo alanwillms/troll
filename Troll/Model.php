@@ -296,7 +296,7 @@ abstract class Troll_Model
 					if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 						
 						$ids       = $calledClass::$__relationships[$calledClass][$name]['local_id'];
-						$class    = $calledClass::$__relationships[$calledClass][$name]['class_name'];
+						$class     = $calledClass::$__relationships[$calledClass][$name]['class_name'];
 						$remoteIds = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
 						
 						// TODO Ao setar os relacionamentos, testar se tem
@@ -305,8 +305,9 @@ abstract class Troll_Model
 						// "Where" condition
 						$options = array();
 						foreach ($ids as $k => $id) {
+							$id = $calledClass::columnToAttribute($id);
 							if (isset($this->__attributesData[$id])) {
-								$options[$remoteIds[$k]] = $this->$id;
+								$options[$class::columnToAttribute($remoteIds[$k])] = $this->$id;
 							}
 						}
 						
@@ -830,7 +831,18 @@ abstract class Troll_Model
 								$expression = $calledClass::attributeToColumn($expression);
 							}
 							
-							$select->where($expression . ' = ?', $calledClass::cast($value, $type));
+							$value = $calledClass::cast($value, $type);
+							
+							if ($type == Troll_Model::TYPE_BOOLEAN) {
+								if ($value === true) {
+									$value = new Zend_Db_Expr('true');
+								}
+								elseif ($value === false) {
+									$value = new Zend_Db_Expr('false');
+								}
+							}
+							
+							$select->where($expression . ' = ?', $value);
 						}
 					}
 				}
@@ -991,8 +1003,16 @@ abstract class Troll_Model
 	{
 		$calledClass = get_called_class();
 		
+		// Attributes
+		$attributes = $calledClass::getAttributes();
+		
+		if (isset($calledClass::$__relationships)
+			&& isset($calledClass::$__relationships[$calledClass])) {
+			$attributes = array_merge($attributes, array_keys($calledClass::$__relationships[$calledClass]));
+		}
+		
 		// Populate
-		foreach ($calledClass::getAttributes() as $attr) {
+		foreach ($attributes as $attr) {
 			
 			if (isset($mixed[$attr]) && $mixed[$attr] !== null && $mixed[$attr] !== '') {
 				
@@ -1448,7 +1468,9 @@ abstract class Troll_Model
 					}
 				}
 				elseif ((false !== strpos($data['DATA_TYPE'], 'float'))
-					|| (false !== strpos($data['DATA_TYPE'], 'double'))) {
+					|| (false !== strpos($data['DATA_TYPE'], 'double'))
+					|| (false !== strpos($data['DATA_TYPE'], 'NUMBER') && $data['PRECISION'] > 0)
+					) {
 					$type = Troll_Model::TYPE_FLOAT;
 				}
 				elseif ($data['DATA_TYPE'] == 'time' || $data['DATA_TYPE'] == 'timetz') {
