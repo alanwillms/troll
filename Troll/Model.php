@@ -9,19 +9,6 @@
 abstract class Troll_Model
 {
 	/**
-	 * Data types
-	 * @var integer
-	 */
-	const TYPE_UNKNOWN  = 'unknown_type';
-	const TYPE_STRING   = 'string';
-	const TYPE_INTEGER  = 'integer';
-	const TYPE_FLOAT    = 'float';
-	const TYPE_DATETIME = 'date_time';
-	const TYPE_DATE     = 'date';
-	const TYPE_TIME     = 'time';
-	const TYPE_BOOLEAN  = 'boolean';	
-	
-	/**
 	 * Flag pointig if this is a new object
 	 * @var boolean
 	 */
@@ -67,13 +54,23 @@ abstract class Troll_Model
 	 * Relationships
 	 * 
 	 * <code>
-	 * array(
-	 * 		'local_attribute' => array(
-	 * 			'local_id'   => 'local_attribute_id',
-	 * 			'class_name' => 'AttributeClass',
-	 * 			'remote_id'  => 'id',
-	 * 		)
-	 * );
+	 * class DbTable_Guy extends Troll_Database_Table
+	 * {
+	 * 	protected $_name            = 'guy';
+	 * 	protected $_dependentTables = array('DbTable_GuyHobby');
+	 * 	protected $_referenceMap    = array(
+	 *         'hobbies' => array(
+	 *             'columns'           => 'id',
+	 * 			   'refTableClass'     => 'DbTable_CaraHobby',
+     *             'refColumns'        => 'id_cara',
+     *             'throughColumns'    => 'id_hobby',
+     *             'throughRefColumns' => 'id',
+	 * 		       'throughClass'      => 'Hobby',
+     *             'throughTableClass' => 'DbTable_Hobby',
+	 * 		       'refType'           => 'manyToMany',
+	 *         ),
+	 * 	);
+	 * }
 	 * </code>
 	 * 
 	 * @var array
@@ -85,12 +82,6 @@ abstract class Troll_Model
 	 * @var array
 	 */
 	protected static $__attributes;
-	
-	/**
-	 * Validators of the attributes
-	 * @var array
-	 */
-	protected static $__attributesValidators;
 	
 	/**
 	 * Database table class name for autoloading
@@ -111,16 +102,13 @@ abstract class Troll_Model
 	protected static $__primaryKeys;
 	
 	/**
-	 * Database table columns data type
-	 * @var array
-	 */
-	protected static $__dataTypes;
-	
-	/**
 	 * Underscore to camel-case filter
 	 * @var Zend_Filter_Word_UnderscoreToCamelCase
 	 */
 	protected static $_underscoreToCamelCaseFilter;
+	
+	// TODO
+	protected static $_databaseTablesPrefixOrNamespaceOrWhateverTODO;
 	
 	/**
 	 * Constructor
@@ -150,7 +138,12 @@ abstract class Troll_Model
 			// If there are relationships
 			if (isset($calledClass::$__relationships[$calledClass])) {
 				foreach ($calledClass::$__relationships[$calledClass] as $attr => $data) {
-					$this->__attributesData[$attr] = null;
+					if (isset($data['has_many']) && $data['has_many']) {
+						$this->__attributesData[$attr] = array();
+					}
+					else {
+						$this->__attributesData[$attr] = null;
+					}
 				}
 			}
 		}
@@ -194,6 +187,8 @@ abstract class Troll_Model
 	 */
 	public function __set($name, $value)
 	{
+		$calledClass = get_called_class();
+			
 		// Cannot change primary keys values @important
 		if (false !== in_array($name, $this::$__primaryKeys)) {
 			throw new Troll_Model_Exception('You cannot change primary keys values!');
@@ -204,7 +199,12 @@ abstract class Troll_Model
 		
 		// Before setting, cast the value
 		if (false === in_array($name, $this->_attributesWithoutCasting)) {
-			$value = $this->cast($value, $this->_getTypeOf($name));
+			$value = Troll_Model_TypeManager::cast(
+				$value,
+				$calledClass::getDatabaseTable()->getTypeOf(
+					$calledClass::attributeToColumn($name)
+				)
+			);
 		}
 		
 		// Try to load an setAttributeName method
@@ -213,49 +213,68 @@ abstract class Troll_Model
 		}
 		elseif (array_key_exists($name, $this->__attributesData)) {
 			
-			$calledClass = get_called_class();
-			
 			// Test for a relationship
 			if (isset($calledClass::$__relationships) && isset($calledClass::$__relationships[$calledClass])) {
 				
 				// Setting a relationship object
 				if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 					
-					if ($value !== null) {
-						$remoteClass = $calledClass::$__relationships[$calledClass][$name]['class_name'];
+					$relData = $calledClass::$__relationships[$calledClass][$name];
+					
+					if (!isset($relData['refType'])) {
+						$relData['refType'] = 'manyToOne';
+					}
+					
+					// If the value is null and it is manyToOne
+					if ($relData['refType'] == 'manyToOne' && $value === null) {
 						
-						// Test object type
-						if (!$value instanceof $remoteClass) {
-							
-							throw new Troll_Model_Exception('Value must be an instance '
-							                              . 'of ' . $calledClass::$__relationships[$calledClass][$name]['class_name']
-							                              . ' class');
+						// Set null IDs
+						$refColumns = (array) $relData['refColumns'];
+						
+						foreach ($refColumns as $k => $rem) {
+							$loc = $calledClass::columnToAttribute($relData['columns'][$k]);
+							$this->__attributesData[$loc] = null;
 						}
 						
-						// Set IDs values
-						foreach ($calledClass::$__relationships[$calledClass][$name]['remote_id'] as $k => $rem) {
-							$rem = $remoteClass::columnToAttribute($rem);
-							$loc = $calledClass::columnToAttribute($calledClass::$__relationships[$calledClass][$name]['local_id'][$k]);
+						// Set null object
+						$this->__attributesData[$name] = null;
+					}
+					
+					// If the value is a set of objects and it is empty
+					else if ($relData['refType'] != 'manyToOne' && (!$value || !count($value))) {
+						$this->__attributesData[$name] = array();
+					}
+					
+					// If there is a value and is a single relationship
+					else if ($relData['refType'] == 'manyToOne') {
+						
+						// Set IDs
+						$refColumns = (array) $relData['refColumns'];
+						
+						foreach ($refColumns as $k => $rem) {
+							$rem = $relData['refClass']::columnToAttribute($rem);
+							$loc = $calledClass::columnToAttribute($relData['columns'][$k]);
 							$this->__attributesData[$loc] = $value->$rem;
 						}
+						
+						// Set object
+						$this->__attributesData[$name] = $value;
 					}
 					
-				}
-				// The object will be set only if needed via __get - so it becomes null
-				else {
-					
-					// If a change occurred
-					if ($this->$name != $value) {
-						foreach ($this::$__relationships[$calledClass] as $localName => $data) {
-							if ($name == $data['local_id']) {
-								$this->__attributesData[$localName] = null;
-								break;
-							}
+					// Multiple objects
+					else {
+						if (!is_array($value)) {
+							throw new Troll_Model_Exception('Setted value is not an array!');
 						}
+						// Set objects
+						$this->__attributesData[$name] = $value;
 					}
+				}
+				else {
+					// Set value
+					$this->__attributesData[$name] = $value;
 				}
 			}
-			$this->__attributesData[$name] = $value;
 		}
 		else {
 			throw new Troll_Model_Exception('Setting invalid attribute "' .
@@ -278,7 +297,7 @@ abstract class Troll_Model
 	 * @param string $name
 	 * @throws Troll_Model_Exception
 	 */
-	public function __get($name)
+	public function &__get($name)
 	{
 		$methods = get_class_methods($this);
 		$method = 'get' . self::_getUnderscoreToCamelCaseFilter()->filter($name);
@@ -293,36 +312,82 @@ abstract class Troll_Model
 			// If there are relationships
 			if (isset(self::$__relationships) && isset(self::$__relationships[$calledClass])) {
 				
-				if (!isset($this->__attributesData[$name])) {
+				if (!isset($this->__attributesData[$name]) || !count($this->__attributesData[$name])) {
 				
 					// If there is an unsetted object
 					if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 						
-						$ids       = $calledClass::$__relationships[$calledClass][$name]['local_id'];
-						$class     = $calledClass::$__relationships[$calledClass][$name]['class_name'];
-						$remoteIds = $calledClass::$__relationships[$calledClass][$name]['remote_id'];
+						$relData = $calledClass::$__relationships[$calledClass][$name];
+						$refType = (isset($relData['refType'])) ? $relData['refType'] : 'manyToOne';
 						
-						// TODO Ao setar os relacionamentos, testar se tem
-						// o mesmo numero de colunas dos dois lados
-						
-						// "Where" condition
-						$options = array();
-						foreach ($ids as $k => $id) {
-							$id = $calledClass::columnToAttribute($id);
-							if (isset($this->__attributesData[$id])) {
-								$options[$class::columnToAttribute($remoteIds[$k])] = $this->$id;
+						// Many to one // one to many
+						if ($refType == 'manyToOne' || $refType == 'oneToMany') {
+							
+							$ids       = (array) $relData['columns'];
+							$class     = $relData['refClass'];
+							$remoteIds = (array) $relData['refColumns'];
+							
+							// TODO Ao setar os relacionamentos, testar se tem
+							// o mesmo numero de colunas dos dois lados
+							
+							// "Where" condition
+							$options = array();
+							foreach ($ids as $k => $id) {
+								$id = $calledClass::columnToAttribute($id);
+								if (isset($this->__attributesData[$id])) {
+									$options[$class::columnToAttribute($remoteIds[$k])] = $this->$id;
+								}
+							}
+							
+							// Find the object(s)
+							if (count($ids) == count($options)) {
+								if ($refType == 'oneToMany') {
+									$this->__attributesData[$name] = $class::all($options);
+								}
+								else {
+									$this->__attributesData[$name] = $class::find($options);
+								}
 							}
 						}
-						
-						// Find the object
-						if (count($ids) == count($options)) {
-							$this->__attributesData[$name] = $class::find($options);
+						// Many to many
+						else if ($refType == 'manyToMany') {
+							
+							// Get reference ids
+							$table = new $relData['refTableClass'];
+							$select = $table->select();
+
+							$refCols        = (array) $relData['refColumns'];
+							$cols           = (array) $relData['columns'];
+							$throughCols    = (array) $relData['throughColumns'];
+							$throughRefCols = (array) $relData['throughRefColumns'];
+							$throughClass   = $relData['throughClass'];
+							
+							foreach ($refCols as $k => $col) {
+								$attr = $calledClass::columnToAttribute($cols[$k]);
+								$select->where($col . ' = ?', $this->$attr);
+							}
+							
+							$rows = $table->fetchAll($select);
+							
+							// Get reference objects
+							$options = array();
+							
+							foreach ($rows as $row) {
+								$where = array();
+								foreach ($throughCols as $k => $col) {
+									$where[] = $throughRefCols[$k] . ' = ' . $row->$col;
+								}
+								$options[] = '(' . implode(') and (', $where) . ')';
+							}
+							
+							if (count($options)) {
+								$options = '(' . implode(') or (', $options) . ')';
+								$this->__attributesData[$name] = $throughClass::all(array(':where' => $options));
+							}
 						}
 					}
-				
 				}
 			}
-			
 			return $this->__attributesData[$name];
 		}
 		else {
@@ -762,7 +827,12 @@ abstract class Troll_Model
 							// Get attributes names
 							$info = $calledClass::$__relationships[$calledClass][$relationship];
 							
-							foreach ($info['local_id'] as $attribute) {
+							$columns = (array) $info['columns'];
+							
+							foreach ($columns as $col) {
+								
+								$attribute = $calledClass::columnToAttribute($col);
+								
 								if (false === in_array($attribute, $ids[':cols'])) {
 									$ids[':cols'][] = $attribute;
 								}
@@ -808,11 +878,7 @@ abstract class Troll_Model
 						$select->reset(Zend_Db_Select::COLUMNS);
 						
 						// Select :cols from
-						$select->from(
-							$calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME),
-							$columns,
-							$calledClass::getDatabaseTable()->info(Zend_Db_Table::SCHEMA),
-						);
+						$select->from($calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME), $columns);
 					}
 					else if ($expression == ':include') {
 						// Nothing to do now!
@@ -831,14 +897,14 @@ abstract class Troll_Model
 							}
 							
 							// Attributes to columns mapping
-							$type = $calledClass::_getTypeOf($expression);
 							if ($calledClass::hasAttributesMapping()) {
 								$expression = $calledClass::attributeToColumn($expression);
 							}
+							$type = $calledClass::getDatabaseTable()->getTypeOf($expression);
 							
-							$value = $calledClass::cast($value, $type);
+							$value = Troll_Model_TypeManager::cast($value, $type);
 							
-							if ($type == Troll_Model::TYPE_BOOLEAN) {
+							if ($type == Troll_Model_TypeManager::BOOLEAN_TYPE) {
 								if ($value === true) {
 									$value = new Zend_Db_Expr('true');
 								}
@@ -858,7 +924,7 @@ abstract class Troll_Model
 		// Search
 		$all  = array();
 		$rows = $calledClass::getDatabaseTable()->fetchAll($select);
-
+		
 		// Not found exception
 		if (!count($rows) && $throwNotFoundException) {
 			throw new Troll_Model_Exception('Objects not found!');
@@ -884,7 +950,7 @@ abstract class Troll_Model
 		}
 		
 		// Includes
-		if (array_key_exists(':include', $ids) && count($all)) {
+		if (is_array($ids) && array_key_exists(':include', $ids) && count($all)) {
 			
 			// Rise relationships
 			$calledClass::_setupRelationships();
@@ -907,8 +973,11 @@ abstract class Troll_Model
 				// Get relationship
 				$relData = $calledClass::$__relationships[$calledClass][$rel];
 				
-				$localIdColumns  = $relData['local_id']; 
-				$remoteIdColumns = $relData['remote_id']; 
+				$localIdColumns      = (array) $relData['columns']; 
+				$remoteIdColumns     = (array) $relData['refColumns']; 
+				$throughIdColumns    = isset($relData['throughColumns']) ? (array) $relData['throughColumns'] : array();
+				$throughRefIdColumns = isset($relData['throughRefColumns']) ? (array) $relData['throughRefColumns'] : array();
+				$throughRefClass     = isset($relData['throughClass']) ? $relData['throughClass'] : null;
 				
 				// Get local IDS
 				$select->reset(Zend_Db_Select::FROM);
@@ -917,8 +986,7 @@ abstract class Troll_Model
 				$select->distinct();
 				$select->from(
 					$calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME),
-					$calledClass::attributeToColumn($localIdColumns),
-					$calledClass::getDatabaseTable()->info(Zend_Db_Table::SCHEMA),
+					$calledClass::attributeToColumn($localIdColumns)
 				);
 				
 				$localIdsRows = $calledClass::getDatabaseTable()->fetchAll($select);
@@ -963,32 +1031,107 @@ abstract class Troll_Model
 				
 				// Fetch all relationships with these IDs
 				$options[] = $where;
-				$rels = $relData['class_name']::all($options);
+				$rels = array();
+				
+				$refTable = null;
+				
+				if (isset($relData['refType']) && $relData['refType'] == 'manyToMany') {
+					$refTable = new $relData['refTableClass']();
+					$rels = $refTable->fetchAll('(' . implode(') or (', $options) . ')');
+				}
+				else { 
+					$rels = $relData['refClass']::all($options);
+				}
 				$relationships = array();
-
+				
 				foreach ($rels as $row) {
 					$data = array();
 					foreach ($remoteIdColumns as $rem) {
-						$rem = $relData['class_name']::columnToAttribute($rem);
+						if (!isset($relData['refType']) || $relData['refType'] != 'manyToMany') {
+							$rem = $relData['refClass']::columnToAttribute($rem);
+						}
 						$data[] = $row->$rem;
 					}
-					$relationships[implode('|', $data)] = $row;
+					if (!isset($relData['refType']) || $relData['refType'] != 'manyToMany') {
+						$relationships[implode('|', $data)] = $row;
+					}
+					else {
+						$key = implode('|', $data) . '%';
+						$data = array();
+						foreach ($throughIdColumns as $rem) {
+							$data[] = $row->$rem;
+						}
+						$key .= implode('|', $data);
+						$relationships[$key] = $row;
+					}
 				}
 				
-				// Insert the objects
-				foreach ($all as $row) {
+				// TODO If it is many to many, get objects
+				if (isset($relData['refType']) && $relData['refType'] == 'manyToMany') {
 					
-					$data = array();
-					foreach ($localIdColumns as $loc) {
-						$loc = $calledClass::columnToAttribute($loc);
-						$data[] = $row->$loc;
+					$rels2 = array();
+					$options = array();
+					foreach ($relationships as $key => $val) {
+						$where = array();
+						$vals = explode('%', $key);
+						$vals = explode('|', array_pop($vals));
+						foreach ($throughRefIdColumns as $k => $col) {
+							$where[] = $col . ' = ' . $vals[$k]; 
+						}
+						$options[] = '(' . implode(') and (', $where) . ')';
 					}
-					if (isset($relationships[implode('|', $data)])) {
-						$row->$rel = $relationships[implode('|', $data)];
+					$options = implode(' or ', $options);
+					$throughs = $throughRefClass::all(array(':where' => $options));
+					
+					// Put the objects in the "through" array
+					$throughArray = array();
+					$options = array();
+					
+					foreach ($all as $row) {
+						foreach ($relationships as $key => $val) {
+							
+							$vals = explode('%', $key);
+							
+							$tmpLocalIds = explode('|', array_shift($vals));
+							$tmpRemoteIds = explode('|', array_shift($vals));
+							
+							$isCurrent = true;
+							
+							foreach ($tmpLocalIds as $k => $localId) {
+								$column = $localIdColumns[$k];
+								$attr = $calledClass::columnToAttribute($col);
+								if ($row->$attr != $localId) {
+									$isCurrent = false;
+									break;
+								}
+							}
+							
+							if ($isCurrent) {
+								$row->$rel = $row->$rel + array($val);
+							}
+						}							
+					}
+				}
+				else {
+					// Insert the objects
+					foreach ($all as $row) {
+						
+						$data = array();
+						foreach ($localIdColumns as $loc) {
+							$loc = $calledClass::columnToAttribute($loc);
+							$data[] = $row->$loc;
+						}
+						if (isset($relationships[implode('|', $data)])) {
+							if (!isset($relData['refType']) || $relData['refType'] == 'manyToOne') {
+								$row->$rel = $relationships[implode('|', $data)];
+							}
+							else {
+								$row->$rel = $row->$rel + array($relationships[implode('|', $data)]);
+							}
+						}
 					}
 				}
 			}
-			
 		}
 		
 		// If limit is only 1, must be an object and not an array
@@ -1130,12 +1273,12 @@ abstract class Troll_Model
 		// Exclusive for some types
 		foreach ($data as $col => $value) {
 			
-			if ($this->_getTypeOf($col) == Troll_Model::TYPE_BOOLEAN) {
+			if ($this->getDatabaseTable()->getTypeOf($col) == Troll_Model_TypeManager::BOOLEAN_TYPE) {
 				if ($value !== null) {
 					$data[$col] = ($value) ? new Zend_Db_Expr('true') : new Zend_Db_Expr('false');
 				}
 			}
-			else if ($this->_getTypeOf($col) == Troll_Model::TYPE_DATE
+			else if ($this->getDatabaseTable()->getTypeOf($col) == Troll_Model_TypeManager::DATE_TYPE
 				&& ($this->getDatabaseTable()->getAdapter() instanceof Zend_Db_Adapter_Oracle
 				|| $this->getDatabaseTable()->getAdapter() instanceof Zend_Db_Adapter_Pdo_Oci)) {
 					
@@ -1363,8 +1506,9 @@ abstract class Troll_Model
 	protected function _initValidations()
 	{
 		$calledClass = get_called_class();
+		$allValidators = $calledClass::getDatabaseTable()->getValidators();
 		
-		foreach ($calledClass::$__attributesValidators[$calledClass] as $attribute => $validators) {
+		foreach ($allValidators as $attribute => $validators) {
 			
 			// First of all, tries not empty
 			$validator = new Zend_Validate_NotEmpty();
@@ -1383,7 +1527,7 @@ abstract class Troll_Model
 				
 				// Do not repeat!
 				if (false !== ($pos = in_array('NotEmpty', $validators))) {
-					unset($calledClass::$__attributesValidators[$calledClass][$attribute][$pos]);
+					unset($allValidators[$attribute][$pos]);
 				}
 			
 				foreach ($validators as $validatorName => $options) {
@@ -1447,67 +1591,12 @@ abstract class Troll_Model
 		// If attributes are not set
 		if (!isset($calledClass::$__attributes)) {
 			$calledClass::$__attributes = array();
-			$calledClass::$__dataTypes  = array();
 		}
 		
 		// If class attributes are not set
 		if (!isset($calledClass::$__attributes[$calledClass])) {
 			
 			$calledClass::$__attributes[$calledClass] = array();
-			$calledClass::$__dataTypes[$calledClass]  = array();
-			
-			// Detects main type (int, float, string, date, time, datetime)
-			$info = $calledClass::getDatabaseTable()->info(Zend_Db_Table_Abstract::METADATA);
-			
-			foreach ($info as $col => $data) {
-				
-				if ($calledClass::hasAttributesMapping()) {
-					$col = $calledClass::columnToAttribute($col);
-				}
-				
-				$type = Troll_Model::TYPE_UNKNOWN;
-				
-				if ((false !== strpos($data['DATA_TYPE'], 'char'))
-					|| (false !== strpos($data['DATA_TYPE'], 'text'))
-					|| ($data['DATA_TYPE'] == 'VARCHAR2')
-					) {
-					$type = Troll_Model::TYPE_STRING;
-				}
-				elseif (false !== strpos($data['DATA_TYPE'], 'int')) {
-					
-					// FIXME Quando resolver arrays, resolver isso
-					if (preg_match('/^_/', $data['DATA_TYPE'])) {
-						$type = Troll_Model::TYPE_STRING;
-					}
-					else {
-						$type = Troll_Model::TYPE_INTEGER;
-					}
-				}
-				elseif ((false !== strpos($data['DATA_TYPE'], 'float'))
-					|| (false !== strpos($data['DATA_TYPE'], 'double'))
-					|| (false !== strpos($data['DATA_TYPE'], 'NUMBER') && $data['PRECISION'] > 0)
-					) {
-					$type = Troll_Model::TYPE_FLOAT;
-				}
-				elseif ($data['DATA_TYPE'] == 'time' || $data['DATA_TYPE'] == 'timetz') {
-					$type = Troll_Model::TYPE_TIME;
-				}
-				elseif ($data['DATA_TYPE'] == 'date' || $data['DATA_TYPE'] == 'DATE') {
-					$type = Troll_Model::TYPE_DATE;
-				}
-				elseif ((false !== strpos($data['DATA_TYPE'], 'datetime'))
-					|| (false !== strpos($data['DATA_TYPE'], 'timestamp'))
-					) {
-					$type = Troll_Model::TYPE_DATETIME;
-				}
-				elseif ($data['DATA_TYPE'] == 'boolean' || $data['DATA_TYPE'] == 'bool') {
-					$type = Troll_Model::TYPE_BOOLEAN;
-				}
-				
-				// Add column data
-				$calledClass::$__dataTypes[$calledClass][$col] = $type; 
-					
-			}
 			
 			// If there is attributes mapping
 			if ($calledClass::hasAttributesMapping()) {
@@ -1551,19 +1640,6 @@ abstract class Troll_Model
 				$cols = $calledClass::_getDatabaseTableColumns();
 				$calledClass::$__attributes[$calledClass] = $cols;
 				
-				// Load validators
-				if (!isset($calledClass::$__attributesValidators)) {
-					$calledClass::$__attributesValidators = array();
-				}
-				if (!isset($calledClass::$__attributesValidators[$calledClass])) {
-					$calledClass::$__attributesValidators[$calledClass] = array();
-				}
-				foreach ($cols as $col) {
-					if (!isset($calledClass::$__attributesValidators[$calledClass][$col])) {
-						$calledClass::$__attributesValidators[$calledClass][$col] = array();
-					}
-				}
-				
 				// Load primary keys
 				if (!isset($calledClass::$__primaryKeys)) {
 					$calledClass::$__primaryKeys = array();
@@ -1575,55 +1651,6 @@ abstract class Troll_Model
 				
 				if (!count($calledClass::$__primaryKeys[$calledClass])) {
 					throw new Troll_Model_Exception('Primary keys are not defined!');
-				}
-			}
-			
-			// Validators and data types
-			$info = $calledClass::getDatabaseTable()->info(Zend_Db_Table_Abstract::METADATA);
-			
-			foreach ($info as $col => $data) {
-				
-				// Get true attribute name
-				if ($calledClass::hasAttributesMapping()) {
-					$col = $calledClass::columnToAttribute($col);
-				}
-				
-				// Detects column sizes and adds validations: smallint, bigint. etc.
-				
-				// TODO Detectar somente primary keys COM autoincrement
-				if (!$data['PRIMARY']) {
-					
-					// It is not "nullable" and there is no "default value"
-					if (!$data['NULLABLE'] && ($data['DEFAULT'] === null || $data['DEFAULT'] === '')) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'NotEmpty';
-					}
-					if ($data['LENGTH']) {
-						// String length for string values
-						if ($calledClass::$__dataTypes[$calledClass][$col] == Troll_Model::TYPE_STRING) {
-							// May be it returns -1 - I will cut "0" too
-							if ($data['LENGTH'] > 0) {
-								$calledClass::$__attributesValidators[$calledClass][$col]['StringLength'] = array('max' => $data['LENGTH']);
-							}
-						}
-					}
-					// Types validators
-					$type = $calledClass::$__dataTypes[$calledClass][$col];
-					
-					if ($type == Troll_Model::TYPE_INTEGER) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'Int';
-					}
-					elseif ($type == Troll_Model::TYPE_FLOAT) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'Float';
-					}
-					elseif ($type == Troll_Model::TYPE_DATE) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'Date';
-					}
-					elseif ($type == Troll_Model::TYPE_DATETIME) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'Troll_Validate_DateTime';
-					}
-					elseif ($type == Troll_Model::TYPE_TIME) {
-						$calledClass::$__attributesValidators[$calledClass][$col][] = 'Troll_Validate_Time';
-					}
 				}
 			}
 		}
@@ -1644,26 +1671,8 @@ abstract class Troll_Model
 		
 		// If attributes is not set
 		if (!isset($calledClass::$__relationships[$calledClass])) {
-			
-			// Try to autoload attributes
-			$references = $calledClass::getDatabaseTable()->info(Zend_Db_Table_Abstract::REFERENCE_MAP);
-			
-			if (is_array($references) && count($references)) {
-				
-				$calledClass::$__relationships[$calledClass] = array();
-				
-				foreach ($references as $localName => $data) {
-					
-					// Set a relationship
-					$calledClass::$__relationships[$calledClass][$localName] = array(
-						'local_id'   => (array) $data['columns'],
-						'class_name' => $data['refClass'],
-						'remote_id'  => (array) $data['refColumns'],
-					);
-					
-				}
-				
-			}
+			// Load data
+			$calledClass::$__relationships[$calledClass] = $calledClass::getDatabaseTable()->info(Zend_Db_Table_Abstract::REFERENCE_MAP);
 		}
 	}
 	
@@ -1717,71 +1726,6 @@ abstract class Troll_Model
 				$calledClass::$__databaseTableClassName[$calledClass]
 			);
 		}
-	}
-	
-	/**
-	 * Casting values to PHP type (it is also for Zend_Db_Table inserts/update)
-	 * @param Mixed $value
-	 * @param int $type
-	 */
-	public static function cast($value, $type)
-	{
-		// Returning null
-		if ($value == null && $value !== 0 && $value !== '0' && $value !== false) {
-			return null;
-		}
-		// Other model
-		if ($value instanceof Troll_Model) {
-			return $value;
-		}
-		
-		// Casting
-		switch ($type) {
-			
-			case Troll_Model::TYPE_STRING:
-				return (string) $value;
-				break;
-			
-			case Troll_Model::TYPE_INTEGER:
-				return (int) $value;
-				break;
-				
-			case Troll_Model::TYPE_FLOAT:
-				// If locale has "," as decimal separator
-				return (float) str_replace(',', '.', (string) $value);
-				break;
-			
-			case Troll_Model::TYPE_DATE:
-			case Troll_Model::TYPE_DATETIME:
-			case Troll_Model::TYPE_TIME:
-				return ($value instanceof Zend_Date) ? $value : new Zend_Date($value);
-				break;
-			
-			case Troll_Model::TYPE_BOOLEAN:
-				return (boolean) $value;
-				break;
-				
-			default:
-				return (string) $value;
-				break;
-			
-		}
-	}
-	
-	/**
-	 * Get the type of some attribute
-	 * @param string $attribute
-	 * @return int
-	 */
-	protected static function _getTypeOf($attribute)
-	{
-		$calledClass = get_called_class();
-		
-		if (!isset($calledClass::$__dataTypes[$calledClass][$attribute])) {
-			return Troll_Model::TYPE_UNKNOWN;
-		}
-		
-		return $calledClass::$__dataTypes[$calledClass][$attribute];
 	}
 	
 	/**
