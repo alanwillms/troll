@@ -1,0 +1,43 @@
+ELEASE INFORMATION
+---------------
+Troll Library 0.1.2
+
+THIS RELEASE IS A DEVELOPMENT RELEASE AND NOT INTENDED FOR PRODUCTION USE.
+PLEASE USE AT YOUR OWN RISK.
+
+SYSTEM REQUIREMENTS
+-------------------
+
+Zend Framework 1.11 and PHP 5.3.*
+
+INSTALLATION
+------------
+
+Copy the "Troll" folder and its contents to your project library directory.
+
+Setup in your autoloader:
+
+$autoloader->removeResourceType('model');
+ // Using just "ClassName" instead of "Model_ClassName"
+ $autoloader->addResourceType('model', 'models', '');
+
+ $autoloader->removeResourceType('DbTable');
+  // Using just "DbTable_ClassName" instead of "Model_DbTable_ClassName"
+  $autoloader->addResourceType('DbTable', 'models/DbTable', 'DbTable');     
+
+  // Troll_ 
+  $autoloader->setFallbackAutoloader(true);
+  $autoloader->registerNamespace(Troll_');
+
+  CONTRIBUTING
+  ------------
+
+  If you wish to contribute to Troll Library, contact me:
+  dyulax@gmail.com.
+
+  DOCUMENTATION
+  ----------------------
+
+  Online documentation can be found at 
+  http://alanwillms.com/troll/
+	  (portuguese online)
