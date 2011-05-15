@@ -12,14 +12,14 @@ abstract class Troll_Model
 	 * Data types
 	 * @var integer
 	 */
-	const TYPE_UNKNOWN  = 0;
-	const TYPE_STRING   = 1;
-	const TYPE_INTEGER  = 2;
-	const TYPE_FLOAT    = 3;
-	const TYPE_DATETIME = 4;
-	const TYPE_DATE     = 5;
-	const TYPE_TIME     = 6;
-	const TYPE_BOOLEAN  = 7;	
+	const TYPE_UNKNOWN  = 'unknown_type';
+	const TYPE_STRING   = 'string';
+	const TYPE_INTEGER  = 'integer';
+	const TYPE_FLOAT    = 'float';
+	const TYPE_DATETIME = 'date_time';
+	const TYPE_DATE     = 'date';
+	const TYPE_TIME     = 'time';
+	const TYPE_BOOLEAN  = 'boolean';	
 	
 	/**
 	 * Flag pointig if this is a new object
@@ -221,20 +221,23 @@ abstract class Troll_Model
 				// Setting a relationship object
 				if (false !== in_array($name, array_keys($calledClass::$__relationships[$calledClass]))) {
 					
-					$remoteClass = $calledClass::$__relationships[$calledClass][$name]['class_name'];
-					
-					// Test object type
-					if (!$value instanceof $remoteClass) {
-						throw new Class_Model_Exception('Value must be an instance '
-						                              . 'of ' . $calledClass::$__relationships[$calledClass][$name]['class_name']
-						                              . ' class');
-					}
-					
-					// Set IDs values
-					foreach ($calledClass::$__relationships[$calledClass][$name]['remote_id'] as $k => $rem) {
-						$rem = $remoteClass::columnToAttribute($rem);
-						$loc = $calledClass::columnToAttribute($calledClass::$__relationships[$calledClass][$name]['local_id'][$k]);
-						$this->__attributesData[$loc] = $value->$rem;
+					if ($value !== null) {
+						$remoteClass = $calledClass::$__relationships[$calledClass][$name]['class_name'];
+						
+						// Test object type
+						if (!$value instanceof $remoteClass) {
+							
+							throw new Troll_Model_Exception('Value must be an instance '
+							                              . 'of ' . $calledClass::$__relationships[$calledClass][$name]['class_name']
+							                              . ' class');
+						}
+						
+						// Set IDs values
+						foreach ($calledClass::$__relationships[$calledClass][$name]['remote_id'] as $k => $rem) {
+							$rem = $remoteClass::columnToAttribute($rem);
+							$loc = $calledClass::columnToAttribute($calledClass::$__relationships[$calledClass][$name]['local_id'][$k]);
+							$this->__attributesData[$loc] = $value->$rem;
+						}
 					}
 					
 				}
@@ -691,8 +694,6 @@ abstract class Troll_Model
 	 * // :offset => $offset
 	 * // :limit => $limit
 	 * 
-	 * // TODO Includes - solve N+1 problem
-	 * 
 	 * // :include => 'relationship'
 	 * // :include => array('relationship' => array('col1', 'col2'), 'other_relationship')
 	 * // :include => array('relationship' => array('col1', 'col2', ':include' => 'subrelationship'))
@@ -807,7 +808,11 @@ abstract class Troll_Model
 						$select->reset(Zend_Db_Select::COLUMNS);
 						
 						// Select :cols from
-						$select->from($calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME), $columns);
+						$select->from(
+							$calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME),
+							$columns,
+							$calledClass::getDatabaseTable()->info(Zend_Db_Table::SCHEMA),
+						);
 					}
 					else if ($expression == ':include') {
 						// Nothing to do now!
@@ -853,7 +858,7 @@ abstract class Troll_Model
 		// Search
 		$all  = array();
 		$rows = $calledClass::getDatabaseTable()->fetchAll($select);
-		
+
 		// Not found exception
 		if (!count($rows) && $throwNotFoundException) {
 			throw new Troll_Model_Exception('Objects not found!');
@@ -879,7 +884,7 @@ abstract class Troll_Model
 		}
 		
 		// Includes
-		if (array_key_exists(':include', $ids)) {
+		if (array_key_exists(':include', $ids) && count($all)) {
 			
 			// Rise relationships
 			$calledClass::_setupRelationships();
@@ -907,11 +912,13 @@ abstract class Troll_Model
 				
 				// Get local IDS
 				$select->reset(Zend_Db_Select::FROM);
+				$select->reset(Zend_Db_Select::ORDER);
 				$select->reset(Zend_Db_Select::COLUMNS);
 				$select->distinct();
 				$select->from(
 					$calledClass::getDatabaseTable()->info(Zend_Db_Table::NAME),
-					$calledClass::attributeToColumn($localIdColumns)
+					$calledClass::attributeToColumn($localIdColumns),
+					$calledClass::getDatabaseTable()->info(Zend_Db_Table::SCHEMA),
 				);
 				
 				$localIdsRows = $calledClass::getDatabaseTable()->fetchAll($select);
@@ -958,7 +965,7 @@ abstract class Troll_Model
 				$options[] = $where;
 				$rels = $relData['class_name']::all($options);
 				$relationships = array();
-				
+
 				foreach ($rels as $row) {
 					$data = array();
 					foreach ($remoteIdColumns as $rem) {
@@ -976,7 +983,9 @@ abstract class Troll_Model
 						$loc = $calledClass::columnToAttribute($loc);
 						$data[] = $row->$loc;
 					}
-					$row->$rel = $relationships[implode('|', $data)];
+					if (isset($relationships[implode('|', $data)])) {
+						$row->$rel = $relationships[implode('|', $data)];
+					}
 				}
 			}
 			
@@ -1118,6 +1127,24 @@ abstract class Troll_Model
 		
 		$data = $this->__attributesData;
 		
+		// Exclusive for some types
+		foreach ($data as $col => $value) {
+			
+			if ($this->_getTypeOf($col) == Troll_Model::TYPE_BOOLEAN) {
+				if ($value !== null) {
+					$data[$col] = ($value) ? new Zend_Db_Expr('true') : new Zend_Db_Expr('false');
+				}
+			}
+			else if ($this->_getTypeOf($col) == Troll_Model::TYPE_DATE
+				&& ($this->getDatabaseTable()->getAdapter() instanceof Zend_Db_Adapter_Oracle
+				|| $this->getDatabaseTable()->getAdapter() instanceof Zend_Db_Adapter_Pdo_Oci)) {
+					
+				if ($value instanceof Zend_Date) {
+					$data[$col] = new Zend_Db_Expr("to_date('" . $value->get('dd/MM/yyyy HH:mm:ss') . "', 'dd/mm/rrrr hh24:mi:ss')");
+				}
+			}
+		}
+		
 		// If there is attributes mapping with database table
 		if ($calledClass::hasAttributesMapping()) {
 			$trueData = array();
@@ -1143,18 +1170,6 @@ abstract class Troll_Model
 		foreach ($primaryKeys as $pk) {
 			if (isset($data[$pk]) && $data[$pk] > 0) {
 				$updating++;
-			}
-		}
-		
-		// Exclusive for boolean types
-		foreach ($data as $col => $value) {
-			if ($this->_getTypeOf($col) == Troll_Model::TYPE_BOOLEAN) {
-				if ($value !== null) {
-					$data[$col] = ($value) ? new Zend_Db_Expr('true') : new Zend_Db_Expr('false');
-				}
-				else {
-					$data[$col] = $value;
-				}
 			}
 		}
 		
@@ -1454,6 +1469,7 @@ abstract class Troll_Model
 				
 				if ((false !== strpos($data['DATA_TYPE'], 'char'))
 					|| (false !== strpos($data['DATA_TYPE'], 'text'))
+					|| ($data['DATA_TYPE'] == 'VARCHAR2')
 					) {
 					$type = Troll_Model::TYPE_STRING;
 				}
@@ -1476,7 +1492,7 @@ abstract class Troll_Model
 				elseif ($data['DATA_TYPE'] == 'time' || $data['DATA_TYPE'] == 'timetz') {
 					$type = Troll_Model::TYPE_TIME;
 				}
-				elseif ($data['DATA_TYPE'] == 'date') {
+				elseif ($data['DATA_TYPE'] == 'date' || $data['DATA_TYPE'] == 'DATE') {
 					$type = Troll_Model::TYPE_DATE;
 				}
 				elseif ((false !== strpos($data['DATA_TYPE'], 'datetime'))
